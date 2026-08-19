@@ -62,9 +62,18 @@ export const useApp = create<AppState>((set, get) => {
     }
   }
 
+  /**
+   * Reload a workspace's documents and re-sync its sidebar count from the same
+   * response, so the count can't drift after a create or delete.
+   */
   async function refreshDocuments(workspaceId: string): Promise<void> {
     const documents = await call(api.docs.list(workspaceId))
-    set({ documents })
+    set((s) => ({
+      documents,
+      workspaces: s.workspaces.map((w) =>
+        w.id === workspaceId ? { ...w, documentCount: documents.length } : w
+      )
+    }))
   }
 
   return {

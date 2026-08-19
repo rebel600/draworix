@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useApp } from '@/store/app-store'
 import TextPrompt from './TextPrompt'
+import ConfirmDialog from './ConfirmDialog'
 import type { DocumentInfo } from '@shared/types'
 
 const WORKSPACE_ICONS = ['📁', '🚀', '🧩', '🗄️', '⚙️', '🎯', '🧪', '💡']
@@ -10,6 +11,11 @@ type PromptKind =
   | { kind: 'rename-workspace'; id: string; current: string }
   | { kind: 'document' }
   | { kind: 'rename-document'; path: string; current: string }
+  | null
+
+type ConfirmKind =
+  | { kind: 'delete-workspace'; id: string; name: string; count: number }
+  | { kind: 'delete-document'; path: string; title: string }
   | null
 
 export default function Sidebar(): React.JSX.Element {
@@ -33,6 +39,7 @@ export default function Sidebar(): React.JSX.Element {
 
   const [prompt, setPrompt] = useState<PromptKind>(null)
   const [menuFor, setMenuFor] = useState<string | null>(null)
+  const [confirm, setConfirm] = useState<ConfirmKind>(null)
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null
 
@@ -113,7 +120,12 @@ export default function Sidebar(): React.JSX.Element {
                   danger
                   onClick={() => {
                     setMenuFor(null)
-                    void deleteWorkspace(ws.id)
+                    setConfirm({
+                      kind: 'delete-workspace',
+                      id: ws.id,
+                      name: ws.name,
+                      count: ws.documentCount
+                    })
                   }}
                 />
               </div>
@@ -151,7 +163,8 @@ export default function Sidebar(): React.JSX.Element {
             </button>
             <button
               title="Move to Recycle Bin"
-              onClick={() => void deleteDocument(doc.path)}
+              aria-label={`Delete ${doc.title}`}
+              onClick={() => setConfirm({ kind: 'delete-document', path: doc.path, title: doc.title })}
               className="absolute right-1 top-1.5 hidden rounded px-1 text-mist-400 hover:text-red-400 group-hover:block"
             >
               ×
@@ -180,6 +193,28 @@ export default function Sidebar(): React.JSX.Element {
         confirmLabel={prompt && 'current' in prompt ? 'Rename' : 'Create'}
         onConfirm={handleConfirm}
         onCancel={() => setPrompt(null)}
+      />
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={
+          confirm?.kind === 'delete-workspace' ? 'Delete workspace?' : 'Delete diagram?'
+        }
+        body={
+          confirm?.kind === 'delete-workspace'
+            ? `“${confirm.name}” and its ${confirm.count} diagram${
+                confirm.count === 1 ? '' : 's'
+              } move to the Recycle Bin. You can restore them from there.`
+            : confirm?.kind === 'delete-document'
+              ? `“${confirm.title}” moves to the Recycle Bin. You can restore it from there.`
+              : ''
+        }
+        onConfirm={() => {
+          if (confirm?.kind === 'delete-workspace') void deleteWorkspace(confirm.id)
+          if (confirm?.kind === 'delete-document') void deleteDocument(confirm.path)
+          setConfirm(null)
+        }}
+        onCancel={() => setConfirm(null)}
       />
     </aside>
   )

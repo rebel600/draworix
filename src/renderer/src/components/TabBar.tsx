@@ -21,6 +21,8 @@ export default function TabBar(): React.JSX.Element {
           {/* Dot means unsaved-in-flight; autosave clears it within a second. */}
           {tab.dirty && <span className="size-1.5 rounded-full bg-accent-500" />}
           <button
+            data-testid="tab-close"
+            aria-label={`Close ${tab.title}`}
             onClick={(e) => {
               e.stopPropagation()
               closeTab(tab.path)
