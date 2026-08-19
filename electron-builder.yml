@@ -1,0 +1,16 @@
+appId: ai.hellorix.drawrix
+productName: Drawrix
+directories:
+  buildResources: resources
+  output: dist
+files:
+  - out/**
+  - package.json
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always

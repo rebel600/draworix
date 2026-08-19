@@ -1,0 +1,40 @@
+{
+  "name": "drawrix",
+  "version": "0.1.0",
+  "description": "Local-first diagram & schema design workspace",
+  "main": "./out/main/index.js",
+  "author": "pareek.pradeep@hellorix.ai",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build": "npm run typecheck && electron-vite build",
+    "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
+    "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "postinstall": "electron-builder install-app-deps",
+    "pack:win": "npm run build && electron-builder --win --dir",
+    "dist:win": "npm run build && electron-builder --win",
+    "smoke": "esbuild scripts/smoke.ts --bundle --platform=node --format=esm --outfile=out/smoke.mjs --log-level=warning && node out/smoke.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.7.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.1",
+    "@vitejs/plugin-react": "^5.0.4",
+    "electron": "^38.2.1",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwindcss": "^4.1.14",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9",
+    "zustand": "^5.0.8"
+  }
+}
