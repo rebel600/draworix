@@ -80,6 +80,27 @@ async function bodyHas(page, text) {
   )
 }
 
+/**
+ * The visible text of the code pane. Monaco keeps the real buffer in a model
+ * the page never exposes, so we read the rendered lines and normalise the
+ * non-breaking spaces it pads them with.
+ */
+async function editorText(page) {
+  return page.evaluate(() => {
+    const lines = document.querySelector('[data-testid="source-editor"] .view-lines')
+    return lines ? lines.innerText.replace(/\u00a0/g, ' ') : ''
+  })
+}
+
+/**
+ * Put the caret in the editor. Chromium supports the EditContext API, so
+ * current Monaco has no hidden textarea to click — the rendered lines are the
+ * input surface.
+ */
+async function focusEditor(page) {
+  await page.locator('[data-testid="source-editor"] .view-lines').click()
+}
+
 /** DOM click by visible text — avoids coordinate math entirely. */
 async function clickText(page, text) {
   return page.evaluate((t) => {
@@ -102,6 +123,14 @@ async function main() {
 
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+
+  // Monaco loads a web worker and a theme at runtime; either failing shows up
+  // here long before it shows up on screen.
+  const consoleErrors = []
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') consoleErrors.push(msg.text())
+  })
+  page.on('pageerror', (err) => consoleErrors.push(String(err)))
 
   console.log('launch')
   await until('app shell', () => page.evaluate(() => !!document.querySelector('aside')))
@@ -146,24 +175,53 @@ async function main() {
   await page.locator('input').fill('Billing Schema')
   await clickText(page, 'Create')
 
-  await until('editor opened', () => page.evaluate(() => !!document.querySelector('textarea')))
+  await until('editor opened', () =>
+    page.evaluate(() => !!document.querySelector('[data-testid="source-editor"] .view-lines'))
+  )
   const docPath = path.join(dataRoot, 'Hellorix-Platform', 'Billing-Schema.dgm')
   check('document file created', fs.existsSync(docPath))
   check(
     'starter DSL loaded into the editor',
-    await page.evaluate(() => document.querySelector('textarea')?.value.includes('orders.user_id > users.id'))
+    (await editorText(page)).includes('orders.user_id > users.id')
   )
   check(
-    'canvas counted the starter blocks',
-    await bodyHas(page, '2 blocks')
+    'source is syntax highlighted',
+    // Monaco paints each token class as mtk<n>; more than one class in play
+    // means the grammar actually ran, rather than everything falling back to
+    // the default colour.
+    await page.evaluate(() => {
+      const spans = document.querySelectorAll('[data-testid="source-editor"] .view-lines span[class^="mtk"]')
+      return new Set([...spans].map((s) => s.className)).size > 1
+    })
   )
+  check('canvas counted the starter tables', await bodyHas(page, '2 tables'))
+  check('canvas counted the relationship', await bodyHas(page, '1 link'))
+  check('canvas listed a parsed column', await bodyHas(page, 'created_at'))
+  check('starter schema parses without complaint', !(await bodyHas(page, 'warning')))
   check('tab shows the title', await bodyHas(page, 'Billing Schema'))
   await shot(page, 'diagram-open')
 
+  // Hovering a name asks the parser what it knows about that table.
+  await page
+    .locator('[data-testid="source-editor"] .view-lines span')
+    .filter({ hasText: /^users$/ })
+    .first()
+    .hover()
+  check(
+    'hovering a table explains it',
+    await until('hover widget', () =>
+      page.evaluate(() => document.querySelector('.monaco-hover')?.innerText.includes('4 columns'))
+    )
+  )
+  await shot(page, 'hover')
+  await page.mouse.move(0, 0)
+
   console.log('\nedit and autosave')
-  await page.locator('textarea').click()
+  await focusEditor(page)
   await page.keyboard.press('Control+End')
-  await page.keyboard.type('\ninvoices {\n  id string pk\n}\n', { delay: 10 })
+  // No closing brace typed: the language configuration should supply it.
+  await page.keyboard.type('\ninvoices {\n  id string pk', { delay: 10 })
+  check('typing a block auto-closed it', (await editorText(page)).includes('}'))
 
   check(
     'dirty state shown while typing',
@@ -184,10 +242,7 @@ async function main() {
       bodyHas(page, 'Saved')
     )
   )
-  check(
-    'canvas recounted blocks after the edit',
-    await bodyHas(page, '3 blocks')
-  )
+  check('canvas recounted tables after the edit', await bodyHas(page, '3 tables'))
 
   const onDisk = JSON.parse(fs.readFileSync(docPath, 'utf8'))
   check('source persisted', typeof onDisk.source === 'string' && onDisk.source.includes('invoices'))
@@ -213,11 +268,10 @@ async function main() {
     )
     el?.click()
   })
-  await until('reopened', () => page.evaluate(() => !!document.querySelector('textarea')))
-  check(
-    'edit survived the round trip',
-    await page.evaluate(() => document.querySelector('textarea')?.value.includes('invoices'))
+  await until('reopened', () =>
+    page.evaluate(() => !!document.querySelector('[data-testid="source-editor"] .view-lines'))
   )
+  check('edit survived the round trip', (await editorText(page)).includes('invoices'))
   await shot(page, 'reopened')
 
   console.log('\ndelete guard')
@@ -236,6 +290,37 @@ async function main() {
     'cancelling keeps the sidebar entry',
     await bodyHas(page, 'Billing Schema')
   )
+
+  console.log('\nlanguage services')
+  await focusEditor(page)
+  await page.keyboard.press('Control+End')
+  await page.keyboard.type('\norders.user_id > ghosts.id', { delay: 10 })
+  check(
+    'a relationship to an unknown table is reported',
+    await until('warning count', () => bodyHas(page, '1 warning'))
+  )
+  check(
+    'the offending span is underlined',
+    await page.evaluate(() => !!document.querySelector('.squiggly-warning'))
+  )
+  await shot(page, 'diagnostics')
+
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('us', { delay: 10 })
+  await page.keyboard.press('Control+Space')
+  check(
+    'completion offers the tables in this document',
+    await until('suggest widget', () =>
+      page.evaluate(() => {
+        const widget = document.querySelector('.suggest-widget')
+        return !!widget && widget.classList.contains('visible') && widget.innerText.includes('users')
+      })
+    )
+  )
+  await shot(page, 'completions')
+  await page.keyboard.press('Escape')
+
+  check('nothing threw in the renderer', consoleErrors.length === 0, consoleErrors.join(' | '))
 
   const errors = await page.evaluate(() =>
     document.body.innerText.includes('Error') || document.body.innerText.includes('failed')

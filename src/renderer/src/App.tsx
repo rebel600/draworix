@@ -1,13 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import TabBar from './components/TabBar'
 import SourcePane from './components/SourcePane'
 import CanvasPane from './components/CanvasPane'
 import { useApp } from './store/app-store'
+import { parse } from '@shared/dsl'
 
 export default function App(): React.JSX.Element {
   const { bootstrap, tabs, activeTabPath, error, setError, loading } = useApp()
   const activeTab = tabs.find((t) => t.path === activeTabPath) ?? null
+
+  // One parse per keystroke, shared by both panes, so the editor's diagnostics
+  // and the canvas can never be looking at different trees.
+  const source = activeTab?.doc.source ?? ''
+  const type = activeTab?.doc.type ?? 'erd'
+  const parsed = useMemo(() => parse(source, type), [source, type])
 
   useEffect(() => {
     void bootstrap()
@@ -56,7 +63,7 @@ export default function App(): React.JSX.Element {
         {activeTab ? (
           <div ref={splitRef} className="flex min-h-0 flex-1">
             <div style={{ width: `${splitPct}%` }} className="min-w-0">
-              <SourcePane tab={activeTab} />
+              <SourcePane tab={activeTab} parsed={parsed} />
             </div>
             <div
               onMouseDown={() => {
@@ -66,7 +73,7 @@ export default function App(): React.JSX.Element {
               className="w-px shrink-0 cursor-col-resize bg-ink-600 transition-colors hover:bg-accent-500"
             />
             <div style={{ width: `${100 - splitPct}%` }} className="min-w-0">
-              <CanvasPane tab={activeTab} />
+              <CanvasPane tab={activeTab} parsed={parsed} />
             </div>
           </div>
         ) : (

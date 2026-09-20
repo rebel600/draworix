@@ -30,6 +30,7 @@
     "electron": "^38.2.1",
     "electron-builder": "^26.0.12",
     "electron-vite": "^4.0.1",
+    "monaco-editor": "^0.56.0",
     "playwright-core": "^1.62.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

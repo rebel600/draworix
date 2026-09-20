@@ -1,32 +1,148 @@
+import { useEffect, useRef } from 'react'
+import type * as monaco from 'monaco-editor/editor/editor.api'
+import {
+  THEME_ID,
+  disposeModelsExcept,
+  getModel,
+  pathOfModel,
+  setupMonaco,
+  showDiagnostics
+} from '@/lib/monaco'
 import { useApp, type Tab } from '@/store/app-store'
+import type { ParseResult } from '@shared/dsl'
+
+const EDITOR_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions = {
+  theme: THEME_ID,
+  automaticLayout: true,
+  fontFamily: "'JetBrains Mono', 'Cascadia Mono', Consolas, monospace",
+  fontSize: 13,
+  lineHeight: 21,
+  tabSize: 2,
+  insertSpaces: true,
+  minimap: { enabled: false },
+  scrollBeyondLastLine: false,
+  renderLineHighlight: 'line',
+  lineNumbersMinChars: 3,
+  glyphMargin: false,
+  padding: { top: 10, bottom: 10 },
+  overviewRulerLanes: 0,
+  overviewRulerBorder: false,
+  contextmenu: false,
+  smoothScrolling: true,
+  cursorBlinking: 'smooth',
+  scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
+  // Our completions come from the parser; Monaco's word soup only gets in the way.
+  wordBasedSuggestions: 'off',
+  quickSuggestions: { other: true, comments: false, strings: false },
+  // The pane is narrow: let popups escape it instead of being clipped.
+  fixedOverflowWidgets: true
+}
 
 /**
- * M1 placeholder for the code pane. M2 replaces the textarea with Monaco plus
- * the DSL tokenizer, completions and diagnostics — the store contract
- * (editSource / autosave) stays identical.
+ * The code pane: one Monaco editor, one model per open document.
+ *
+ * Models are keyed by document path and outlive tab switches, so undo history
+ * follows a document around. Text flows one way — edits go to the store, the
+ * store's source comes back only when it differs, which keeps autosave,
+ * reopening and (later) canvas-driven edits from fighting the editor.
  */
-export default function SourcePane({ tab }: { tab: Tab }): React.JSX.Element {
-  const editSource = useApp((s) => s.editSource)
-  const saveNow = useApp((s) => s.saveNow)
+export default function SourcePane({
+  tab,
+  parsed
+}: {
+  tab: Tab
+  parsed: ParseResult
+}): React.JSX.Element {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+  /** Set while we push the store's text into the model, to ignore the echo. */
+  const applying = useRef(false)
+
+  // A primitive, so the effect below only fires when the open set changes.
+  const openPaths = useApp((s) => s.tabs.map((t) => t.path).join('\n'))
+
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+
+    const m = setupMonaco()
+    const editor = m.editor.create(host, EDITOR_OPTIONS)
+    editorRef.current = editor
+
+    const change = editor.onDidChangeModelContent(() => {
+      if (applying.current) return
+      const model = editor.getModel()
+      if (!model) return
+      // Attribute the edit to the model's own document, never to whatever tab
+      // happens to be active by the time this fires.
+      useApp.getState().editSource(pathOfModel(model), model.getValue())
+    })
+
+    editor.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.KeyS, () => {
+      const model = editor.getModel()
+      if (model) void useApp.getState().saveNow(pathOfModel(model))
+    })
+
+    return () => {
+      change.dispose()
+      editor.dispose()
+      editorRef.current = null
+    }
+  }, [])
+
+  // Swap models when the active tab changes.
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const model = getModel(tab.path, tab.doc.source, tab.doc.type)
+    if (editor.getModel() !== model) {
+      editor.setModel(model)
+      editor.focus()
+    }
+  }, [tab.path, tab.doc.type, tab.doc.source])
+
+  // Pull in changes that came from anywhere but this editor.
+  useEffect(() => {
+    const model = editorRef.current?.getModel()
+    if (!model || model.getValue() === tab.doc.source) return
+    applying.current = true
+    model.setValue(tab.doc.source)
+    applying.current = false
+  }, [tab.doc.source])
+
+  useEffect(() => {
+    const model = editorRef.current?.getModel()
+    if (model) showDiagnostics(model, parsed.diagnostics)
+  }, [parsed])
+
+  // Closing a tab should release its model. Runs last, so the active tab has
+  // already been attached to the editor by the swap above.
+  useEffect(() => {
+    disposeModelsExcept(openPaths.split('\n'))
+  }, [openPaths])
+
+  const errors = parsed.diagnostics.filter((d) => d.severity === 'error').length
+  const warnings = parsed.diagnostics.length - errors
 
   return (
     <div className="flex h-full flex-col bg-ink-800">
       <div className="flex h-7 shrink-0 items-center justify-between border-b border-ink-600 px-3 text-[10px] uppercase tracking-wider text-mist-400">
         <span>Source · {tab.doc.type}</span>
-        <span>{tab.saving ? 'Saving…' : tab.dirty ? 'Unsaved' : 'Saved'}</span>
+        <span className="flex items-center gap-3">
+          {errors > 0 && (
+            <span className="text-red-400">
+              {errors} error{errors === 1 ? '' : 's'}
+            </span>
+          )}
+          {warnings > 0 && (
+            <span className="text-amber-400">
+              {warnings} warning{warnings === 1 ? '' : 's'}
+            </span>
+          )}
+          <span>{tab.saving ? 'Saving…' : tab.dirty ? 'Unsaved' : 'Saved'}</span>
+        </span>
       </div>
-      <textarea
-        value={tab.doc.source}
-        spellCheck={false}
-        onChange={(e) => editSource(tab.path, e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-            e.preventDefault()
-            void saveNow(tab.path)
-          }
-        }}
-        className="h-full w-full resize-none bg-ink-800 p-4 font-mono text-[12.5px] leading-relaxed text-mist-100 outline-none"
-      />
+      <div ref={hostRef} data-testid="source-editor" className="min-h-0 flex-1" />
     </div>
   )
 }

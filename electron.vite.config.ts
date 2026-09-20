@@ -32,6 +32,11 @@ export default defineConfig({
       }
     },
     build: {
+      // Monaco is a few megabytes of JavaScript. It loads from disk, so size
+      // costs startup time rather than bandwidth — minify it anyway, and stop
+      // warning about a chunk we know is large on purpose.
+      minify: 'esbuild',
+      chunkSizeWarningLimit: 4000,
       rollupOptions: { input: { index: resolve('src/renderer/index.html') } }
     }
   }
