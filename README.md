@@ -5,17 +5,17 @@ get an auto-laid-out diagram on the right, organised into per-project workspaces
 
 ## Status
 
-**M2 complete** — the DSL has a real parser and the code pane is Monaco,
-with highlighting, completions, hovers and live diagnostics. The canvas still
-draws boxes in a flat list rather than a laid-out diagram; that is M3.
+**M3 complete** — the canvas is real. Source becomes a laid-out diagram, and
+dragging a node keeps it where you put it. Edits still only flow one way:
+editing the canvas rewrites nothing, which is M4.
 
 | Milestone | Scope | State |
 | --- | --- | --- |
 | M0 | Electron + React + TS scaffold, typed IPC | done |
 | M1 | Workspaces, documents, autosave, history, SQLite index | done |
 | M2 | DSL parser with source ranges, Monaco language | done |
-| M3 | React Flow canvas + ELK auto-layout | next |
-| M4 | Two-way code/canvas sync, unified undo | |
+| M3 | React Flow canvas + ELK auto-layout | done |
+| M4 | Two-way code/canvas sync, unified undo | next |
 | M5 | Export: SQL, Prisma, DBML, PNG, SVG | |
 | M6 | Command palette, themes, packaged installer | |
 
@@ -36,7 +36,7 @@ node scripts/drive.mjs --clean   # drive the built app and screenshot each step
 src/
   main/       Node side: fs, settings, sqlite index, ipc handlers
   preload/    the only bridge the renderer can see (contextBridge)
-  renderer/   React UI, and the Monaco language registration in lib/
+  renderer/   React UI: Monaco setup and ELK layout in lib/, canvas in components/
   shared/     types, ipc channel names, document helpers, the DSL parser
 ```
 
@@ -80,6 +80,25 @@ source range it came from, which is what the editor underlines today and what
 M4 will use to map a canvas edit back to the text that produced it.
 
 The editor and the canvas render from the same parse, so they cannot disagree.
+
+## Where nodes go
+
+Two sources, and only two.
+
+**ELK**, running in a web worker, places anything nobody has touched. That
+result is derived from the source and is never written to disk: it is
+deterministic, so reopening a document puts everything back where it was.
+Node sizes are computed rather than measured, which is what lets one layout
+pass be enough.
+
+**You**, by dragging. A dragged node's position is written to `layout` in the
+`.dgm` file and wins from then on. So the file records positions a person
+chose and nothing else, and `layout` stays empty until someone means it to
+have something in it. *Auto layout* in the top-right of the canvas clears
+those positions and hands the whole diagram back to ELK.
+
+A group's box is sized around its members, so an architecture diagram's
+containers grow with what is in them.
 
 ## How data is stored
 

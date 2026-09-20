@@ -5,6 +5,7 @@ import type {
   DgmDocument,
   DiagramType,
   DocumentInfo,
+  Point,
   WorkspaceInfo
 } from '@shared/types'
 
@@ -47,6 +48,8 @@ interface AppState {
   closeTab: (docPath: string) => void
   setActiveTab: (docPath: string) => void
   editSource: (docPath: string, source: string) => void
+  moveNodes: (docPath: string, positions: Record<string, Point>) => void
+  clearLayout: (docPath: string) => void
   saveNow: (docPath: string) => Promise<void>
 
   changeDataRoot: () => Promise<void>
@@ -231,6 +234,42 @@ export const useApp = create<AppState>((set, get) => {
       set((s) => ({
         tabs: s.tabs.map((t) =>
           t.path === docPath ? { ...t, doc: { ...t.doc, source }, dirty: true } : t
+        )
+      }))
+      scheduleSave(docPath, () => {
+        void get().saveNow(docPath)
+      })
+    },
+
+    /**
+     * Canvas drags land here, never in `source`. Positions are the one thing
+     * the diagram surface owns, which is why dragging can never reformat or
+     * reorder hand-written DSL.
+     */
+    moveNodes: (docPath, positions) => {
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          t.path === docPath
+            ? {
+                ...t,
+                doc: { ...t.doc, layout: { ...t.doc.layout, ...positions } },
+                dirty: true
+              }
+            : t
+        )
+      }))
+      scheduleSave(docPath, () => {
+        void get().saveNow(docPath)
+      })
+    },
+
+    /** Forget every hand-placed position, handing the whole diagram back to ELK. */
+    clearLayout: (docPath) => {
+      const tab = get().tabs.find((t) => t.path === docPath)
+      if (!tab || Object.keys(tab.doc.layout).length === 0) return
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          t.path === docPath ? { ...t, doc: { ...t.doc, layout: {} }, dirty: true } : t
         )
       }))
       scheduleSave(docPath, () => {

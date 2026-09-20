@@ -6,6 +6,8 @@ interface Props {
   label: string
   initialValue?: string
   confirmLabel?: string
+  /** Rendered under the field: whatever else this particular prompt needs. */
+  extra?: React.ReactNode
   onConfirm: (value: string) => void
   onCancel: () => void
 }
@@ -20,6 +22,7 @@ export default function TextPrompt({
   label,
   initialValue = '',
   confirmLabel = 'Create',
+  extra,
   onConfirm,
   onCancel
 }: Props): React.JSX.Element | null {
@@ -62,6 +65,7 @@ export default function TextPrompt({
           }}
           className="w-full rounded border border-ink-400 bg-ink-800 px-3 py-2 text-sm text-mist-100 outline-none focus:border-accent-500"
         />
+        {extra}
         <div className="mt-5 flex justify-end gap-2">
           <button
             onClick={onCancel}

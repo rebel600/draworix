@@ -2,7 +2,17 @@ import { useState } from 'react'
 import { useApp } from '@/store/app-store'
 import TextPrompt from './TextPrompt'
 import ConfirmDialog from './ConfirmDialog'
-import type { DocumentInfo } from '@shared/types'
+import type { DiagramType, DocumentInfo } from '@shared/types'
+
+/** One glyph per diagram type, so the sidebar says what a document is. */
+const DIAGRAM_GLYPHS: Record<DiagramType, string> = { erd: '▤', flow: '◇', arch: '⬢' }
+
+/** What each diagram type is for, in the order the picker offers them. */
+const DIAGRAM_TYPES: Array<{ value: DiagramType; label: string; hint: string }> = [
+  { value: 'erd', label: 'Schema', hint: 'Tables and relationships' },
+  { value: 'flow', label: 'Flow', hint: 'Steps and arrows' },
+  { value: 'arch', label: 'Architecture', hint: 'Services inside groups' }
+]
 
 const WORKSPACE_ICONS = ['📁', '🚀', '🧩', '🗄️', '⚙️', '🎯', '🧪', '💡']
 
@@ -38,6 +48,7 @@ export default function Sidebar(): React.JSX.Element {
   } = useApp()
 
   const [prompt, setPrompt] = useState<PromptKind>(null)
+  const [docType, setDocType] = useState<DiagramType>('erd')
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<ConfirmKind>(null)
 
@@ -51,7 +62,7 @@ export default function Sidebar(): React.JSX.Element {
     } else if (prompt.kind === 'rename-workspace') {
       void renameWorkspace(prompt.id, value)
     } else if (prompt.kind === 'document') {
-      void createDocument(value, 'erd')
+      void createDocument(value, docType)
     } else if (prompt.kind === 'rename-document') {
       void renameDocument(prompt.path, value)
     }
@@ -158,7 +169,7 @@ export default function Sidebar(): React.JSX.Element {
                   : 'text-mist-200 hover:bg-ink-700'
               }`}
             >
-              <span className="text-mist-400">{doc.type === 'erd' ? '▤' : '◇'}</span>
+              <span className="text-mist-400">{DIAGRAM_GLYPHS[doc.type]}</span>
               <span className="flex-1 truncate">{doc.title}</span>
             </button>
             <button
@@ -191,6 +202,29 @@ export default function Sidebar(): React.JSX.Element {
           prompt && 'current' in prompt ? prompt.current : ''
         }
         confirmLabel={prompt && 'current' in prompt ? 'Rename' : 'Create'}
+        extra={
+          prompt?.kind === 'document' ? (
+            <div className="mt-4">
+              <span className="mb-1.5 block text-xs text-mist-400">Kind</span>
+              <div className="flex gap-1.5">
+                {DIAGRAM_TYPES.map((option) => (
+                  <button
+                    key={option.value}
+                    title={option.hint}
+                    onClick={() => setDocType(option.value)}
+                    className={`flex-1 rounded border px-2 py-1.5 text-xs transition-colors ${
+                      docType === option.value
+                        ? 'border-accent-500 bg-ink-600 text-mist-100'
+                        : 'border-ink-400 text-mist-400 hover:text-mist-200'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : undefined
+        }
         onConfirm={handleConfirm}
         onCancel={() => setPrompt(null)}
       />

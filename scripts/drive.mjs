@@ -197,6 +197,31 @@ async function main() {
   check('canvas counted the starter tables', await bodyHas(page, '2 tables'))
   check('canvas counted the relationship', await bodyHas(page, '1 link'))
   check('canvas listed a parsed column', await bodyHas(page, 'created_at'))
+  check(
+    'both tables were drawn',
+    await until('nodes on the canvas', () =>
+      page.evaluate(() => document.querySelectorAll('.react-flow__node').length === 2)
+    )
+  )
+  check(
+    'the relationship was drawn',
+    await page.evaluate(() => !!document.querySelector('.react-flow__edge-path'))
+  )
+  // Nodes mount at the origin and stay hidden until elk answers, so this is a
+  // poll rather than a snap judgement.
+  check(
+    'auto layout separated the tables',
+    await until('elk to place the tables', () =>
+      page.evaluate(() => {
+        const boxes = [...document.querySelectorAll('.react-flow__node')].map((n) =>
+          n.getBoundingClientRect()
+        )
+        return (
+          boxes.length === 2 && (boxes[0].right < boxes[1].left || boxes[1].right < boxes[0].left)
+        )
+      })
+    )
+  )
   check('starter schema parses without complaint', !(await bodyHas(page, 'warning')))
   check('tab shows the title', await bodyHas(page, 'Billing Schema'))
   await shot(page, 'diagram-open')
@@ -243,6 +268,11 @@ async function main() {
     )
   )
   check('canvas recounted tables after the edit', await bodyHas(page, '3 tables'))
+  check(
+    'spaces reached the editor',
+    (await editorText(page)).includes('id string pk'),
+    'the canvas must not claim the space key'
+  )
 
   const onDisk = JSON.parse(fs.readFileSync(docPath, 'utf8'))
   check('source persisted', typeof onDisk.source === 'string' && onDisk.source.includes('invoices'))
@@ -254,6 +284,44 @@ async function main() {
       fs.readdirSync(path.join(dataRoot, 'Hellorix-Platform', '.history')).length > 0
   )
   await shot(page, 'saved')
+
+  console.log('\ndragging a node')
+  const layoutOf = () => JSON.parse(fs.readFileSync(docPath, 'utf8')).layout
+  const usersNode = page.locator('.react-flow__node[data-id="users"]')
+  const box = await usersNode.boundingBox()
+  await page.mouse.move(box.x + box.width / 2, box.y + 12)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 + 60, box.y + 140, { steps: 12 })
+  await page.mouse.up()
+
+  check(
+    'the drag reached the document',
+    await until('a saved position', () => Boolean(layoutOf().users), 10_000)
+  )
+  const moved = layoutOf().users
+  check(
+    'the position is a real point',
+    typeof moved?.x === 'number' && typeof moved?.y === 'number',
+    JSON.stringify(moved)
+  )
+  check(
+    'only the dragged node was recorded',
+    Object.keys(layoutOf()).length === 1,
+    Object.keys(layoutOf()).join(',')
+  )
+  check(
+    'the source was left alone',
+    JSON.parse(fs.readFileSync(docPath, 'utf8')).source.includes('orders.user_id > users.id')
+  )
+  await shot(page, 'dragged')
+
+  check('a hand-placed node offers auto layout', await bodyHas(page, 'Auto layout'))
+  await clickText(page, 'Auto layout')
+  check(
+    'auto layout hands the positions back to elk',
+    await until('an empty layout', () => Object.keys(layoutOf()).length === 0, 10_000)
+  )
+  await shot(page, 'auto-layout')
 
   console.log('\nreopen after close')
   // Target the tab's own close button. A bare '×' text match also hits the
@@ -319,6 +387,50 @@ async function main() {
   )
   await shot(page, 'completions')
   await page.keyboard.press('Escape')
+
+  console.log('\narchitecture diagram')
+  await page.evaluate(() => {
+    const plus = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === '+')
+    plus[1]?.click()
+  })
+  await until('diagram prompt', () => page.evaluate(() => !!document.querySelector('input')))
+  await page.locator('input').fill('Platform')
+  await clickText(page, 'Architecture')
+  await shot(page, 'new-diagram-kind')
+  await clickText(page, 'Create')
+
+  check(
+    'the group and its three services were drawn',
+    await until('the arch canvas', () =>
+      page.evaluate(() => document.querySelectorAll('.react-flow__node').length === 4)
+    )
+  )
+  // Before elk answers, every node sits at the origin and a member is trivially
+  // "inside" its group, so this waits for the members to be spread out too.
+  check(
+    'members are laid out inside the group box',
+    await until('nesting', () =>
+      page.evaluate(() => {
+        const box = (id) =>
+          document.querySelector(`.react-flow__node[data-id="${id}"]`)?.getBoundingClientRect()
+        const [group, alb, api] = ['vpc', 'alb', 'api'].map(box)
+        if (!group || !alb || !api) return false
+        const inside =
+          api.left >= group.left &&
+          api.right <= group.right &&
+          api.top >= group.top &&
+          api.bottom <= group.bottom
+        return inside && alb.right <= api.left
+      })
+    )
+  )
+  check(
+    'the architecture document records its kind',
+    JSON.parse(
+      fs.readFileSync(path.join(dataRoot, 'Hellorix-Platform', 'Platform.dgm'), 'utf8')
+    ).type === 'arch'
+  )
+  await shot(page, 'architecture')
 
   check('nothing threw in the renderer', consoleErrors.length === 0, consoleErrors.join(' | '))
 
