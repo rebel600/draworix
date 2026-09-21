@@ -5,9 +5,9 @@ get an auto-laid-out diagram on the right, organised into per-project workspaces
 
 ## Status
 
-**M3 complete** — the canvas is real. Source becomes a laid-out diagram, and
-dragging a node keeps it where you put it. Edits still only flow one way:
-editing the canvas rewrites nothing, which is M4.
+**M4 complete** — edits flow both ways. Rename, delete or connect on the
+canvas and the source is rewritten in place; move around the source and the
+canvas follows. One undo stack covers both.
 
 | Milestone | Scope | State |
 | --- | --- | --- |
@@ -15,8 +15,8 @@ editing the canvas rewrites nothing, which is M4.
 | M1 | Workspaces, documents, autosave, history, SQLite index | done |
 | M2 | DSL parser with source ranges, Monaco language | done |
 | M3 | React Flow canvas + ELK auto-layout | done |
-| M4 | Two-way code/canvas sync, unified undo | next |
-| M5 | Export: SQL, Prisma, DBML, PNG, SVG | |
+| M4 | Two-way code/canvas sync, unified undo | done |
+| M5 | Export: SQL, Prisma, DBML, PNG, SVG | next |
 | M6 | Command palette, themes, packaged installer | |
 
 ## Commands
@@ -37,7 +37,7 @@ src/
   main/       Node side: fs, settings, sqlite index, ipc handlers
   preload/    the only bridge the renderer can see (contextBridge)
   renderer/   React UI: Monaco setup and ELK layout in lib/, canvas in components/
-  shared/     types, ipc channel names, document helpers, the DSL parser
+  shared/     types, ipc channel names, document helpers, the DSL and its edits
 ```
 
 `src/shared` is compiled into all three bundles, so nothing there may import
@@ -99,6 +99,47 @@ those positions and hands the whole diagram back to ELK.
 
 A group's box is sized around its members, so an architecture diagram's
 containers grow with what is in them.
+
+## Editing from either side
+
+| On the canvas | What it does to the source |
+| --- | --- |
+| Pencil on a node, or F2 | Rewrites the declaration and every reference to it |
+| Delete on a selected node | Removes its block, anything nested in it, and its relationships |
+| Delete on a selected relationship | Removes that one statement |
+| Drag between two nodes | Appends a relationship |
+| Drag a node | Touches `layout` only — never the source |
+
+The canvas never prints the parsed model back out. Doing that would reformat
+hand-written DSL, reorder statements and drop every comment, so each action
+instead becomes a handful of replacements aimed at the ranges the parser
+recorded. Deleting a relationship takes the comment trailing it; renaming a
+table leaves a column that happens to share its name alone. The edits are
+pure functions in `src/shared/dsl/edits.ts`, and they are the best-tested
+code in the repo for good reason.
+
+Edits are measured against the text they were computed from, and dropped if
+the document has moved on since. An offset only means something against one
+version of a file.
+
+### Selection
+
+There is one selection, shared. The editor sets it from whatever the caret is
+inside; the canvas sets it from whatever you clicked and sends the caret
+after it. Only that direction moves the caret — echoing the editor's own
+caret back at it would drag the cursor around while you type.
+
+### Undo
+
+Canvas actions are applied to the editor's model rather than to the store, so
+they land on the same undo stack as typing: Ctrl+Z from either pane takes
+back the last change to the document, whichever pane made it.
+
+Dragging is the exception, because it changes `layout` and Monaco knows
+nothing about that. Those steps are kept in `lib/history.ts` alongside the
+text version they happened at, which is what keeps the two in order: a drag
+is only undone first if no text edit landed after it. *Auto layout* is
+recorded the same way, so handing the diagram back to ELK is undoable too.
 
 ## How data is stored
 

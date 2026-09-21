@@ -388,6 +388,124 @@ async function main() {
   await shot(page, 'completions')
   await page.keyboard.press('Escape')
 
+  console.log('\ntwo-way editing')
+  const sourceOnDisk = () => JSON.parse(fs.readFileSync(docPath, 'utf8')).source
+  const nodeAt = (id) => page.locator(`.react-flow__node[data-id="${id}"]`)
+  const isSelected = (id) =>
+    page.evaluate(
+      (nodeId) =>
+        document.querySelector(`.react-flow__node[data-id="${nodeId}"]`)?.classList.contains('selected') ??
+        false,
+      id
+    )
+
+  // Editor to canvas: put the caret in a declaration, the node lights up.
+  await page
+    .locator('[data-testid="source-editor"] .view-lines span')
+    .filter({ hasText: /^orders$/ })
+    .first()
+    .click()
+  check('the caret selects the node it sits in', await until('orders selected', () => isSelected('orders')))
+
+  // Canvas to editor: click a node, the editor goes to its declaration.
+  await nodeAt('users').click()
+  check(
+    'clicking a node takes the caret to its declaration',
+    // `users {` is line 2 of the starter schema, and Monaco marks the line the
+    // caret is on in the gutter.
+    await until('the caret to move', () =>
+      page.evaluate(() => document.querySelector('.active-line-number')?.textContent?.trim() === '2')
+    )
+  )
+  check('and the node itself is selected', await isSelected('users'))
+  await shot(page, 'selection-synced')
+
+  // F2 opens the same field the pencil does.
+  await page.keyboard.press('F2')
+  check(
+    'F2 renames the selected node',
+    await until('the rename field', () =>
+      page.evaluate(() => !!document.querySelector('[data-testid="rename-field"]'))
+    )
+  )
+  await page.keyboard.press('Escape')
+
+  // Rename on the canvas, rewritten in the source.
+  await nodeAt('users').hover()
+  await page.locator('[aria-label="Rename users"]').click()
+  await until('the rename field', () =>
+    page.evaluate(() => !!document.querySelector('[data-testid="rename-field"]'))
+  )
+  await page.keyboard.type('people', { delay: 20 })
+  await page.keyboard.press('Enter')
+
+  check(
+    'renaming a node rewrites its declaration',
+    await until('the rename to reach disk', () => sourceOnDisk().includes('people {'), 10_000)
+  )
+  check('and every reference to it', sourceOnDisk().includes('> people.id'))
+  check('and nothing else', sourceOnDisk().includes('orders {'))
+  check('the canvas shows the new name', await bodyHas(page, 'people'))
+  await shot(page, 'renamed')
+
+  // One undo stack: Ctrl+Z on the canvas undoes what the canvas did.
+  await nodeAt('orders').click()
+  await page.keyboard.press('Control+z')
+  check(
+    'undo on the canvas takes the rename back',
+    await until('the undo to reach disk', () => sourceOnDisk().includes('users {'), 10_000)
+  )
+  check('including the references', sourceOnDisk().includes('> users.id'))
+
+  // Draw a relationship by dragging between two nodes.
+  const centre = (box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 })
+  const from = centre(await nodeAt('invoices').locator('.react-flow__handle.source').boundingBox())
+  const to = centre(await nodeAt('orders').locator('.react-flow__handle.target').boundingBox())
+  await page.mouse.move(from.x, from.y)
+  await page.mouse.down()
+  await page.mouse.move(to.x, to.y, { steps: 16 })
+  await page.mouse.up()
+  check(
+    'dragging between two nodes writes a relationship',
+    await until('the new relationship', () => sourceOnDisk().includes('invoices > orders'), 10_000)
+  )
+  await shot(page, 'connected')
+
+  // Delete a node from the canvas, and take it back.
+  await nodeAt('invoices').click()
+  await page.keyboard.press('Delete')
+  check(
+    'deleting a node removes its block',
+    await until('the delete to reach disk', () => !sourceOnDisk().includes('invoices {'), 10_000)
+  )
+  check('and the relationships it was in', !sourceOnDisk().includes('invoices > orders'))
+  check('and leaves the rest of the document parsing', !(await bodyHas(page, 'error')))
+  await shot(page, 'deleted')
+
+  await page.locator('.react-flow__pane').click()
+  await page.keyboard.press('Control+z')
+  check(
+    'undo brings the deleted node back',
+    await until('the undo to reach disk', () => sourceOnDisk().includes('invoices {'), 10_000)
+  )
+
+  // Dragging is on the same stack, ahead of the text.
+  const before = await nodeAt('orders').boundingBox()
+  await page.mouse.move(before.x + before.width / 2, before.y + 12)
+  await page.mouse.down()
+  await page.mouse.move(before.x + before.width / 2 - 80, before.y + 120, { steps: 12 })
+  await page.mouse.up()
+  check(
+    'the drag was recorded',
+    await until('a saved position', () => Boolean(layoutOf().orders), 10_000)
+  )
+  await page.keyboard.press('Control+z')
+  check(
+    'undo on the canvas takes the drag back before the text',
+    await until('the position to be dropped', () => !layoutOf().orders, 10_000)
+  )
+  check('and leaves the source untouched', sourceOnDisk().includes('invoices {'))
+
   console.log('\narchitecture diagram')
   await page.evaluate(() => {
     const plus = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === '+')

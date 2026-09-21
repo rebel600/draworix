@@ -80,7 +80,12 @@ export interface Endpoint {
   node: string
   /** Column name for `orders.user_id`; null for a bare node reference. */
   field: string | null
+  /** The whole reference, `orders.user_id`. */
   range: Range
+  /** Just the node name, so a rename can rewrite it and leave the column be. */
+  nodeRange: Range
+  /** Just the column name, when one was written. */
+  fieldRange: Range | null
 }
 
 export interface Edge {

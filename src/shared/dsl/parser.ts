@@ -314,8 +314,8 @@ class Parser {
     this.skipLine()
 
     this.rawEdges.push({
-      from: { node: from.node, field: from.field, range: from.range },
-      to: { node: to.node, field: to.field, range: to.range },
+      from: endpointOf(from),
+      to: endpointOf(to),
       kind,
       label,
       range: spanRange(from.range, last)
@@ -326,19 +326,28 @@ class Parser {
 
   /** `users`, or `orders.user_id` when a dot follows. */
   private parseQualifier(name: Name): Qualified {
-    if (!this.at('punct', '.')) {
-      return { node: name.text, field: null, range: name.range, text: name.text }
-    }
+    const bare = (): Qualified => ({
+      node: name.text,
+      field: null,
+      range: name.range,
+      nodeRange: name.range,
+      fieldRange: null,
+      text: name.text
+    })
+
+    if (!this.at('punct', '.')) return bare()
     this.next()
     const field = this.parseName()
     if (!field) {
       this.report('error', 'missing-column', 'Expected a column name after the dot.', this.peek().range)
-      return { node: name.text, field: null, range: name.range, text: name.text }
+      return bare()
     }
     return {
       node: name.text,
       field: field.text,
       range: spanRange(name.range, field.range),
+      nodeRange: name.range,
+      fieldRange: field.range,
       text: `${name.text}.${field.text}`
     }
   }
@@ -524,6 +533,17 @@ class Parser {
 
   private skipTrivia(): void {
     while (this.peek().kind === 'newline' || this.peek().kind === 'comment') this.next()
+  }
+}
+
+/** Drop the printable text a qualified reference carried through parsing. */
+function endpointOf(qualified: Qualified): Endpoint {
+  return {
+    node: qualified.node,
+    field: qualified.field,
+    range: qualified.range,
+    nodeRange: qualified.nodeRange,
+    fieldRange: qualified.fieldRange
   }
 }
 

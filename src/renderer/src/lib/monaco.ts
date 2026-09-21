@@ -19,7 +19,9 @@ import {
   FIELD_TYPES,
   parse,
   type Diagnostic,
-  type DiagramNode
+  type DiagramNode,
+  type Range as SourceRange,
+  type TextEdit
 } from '@shared/dsl'
 import type { DiagramType } from '@shared/types'
 
@@ -83,6 +85,103 @@ export function disposeModelsExcept(keepPaths: readonly string[]): void {
   for (const model of monaco.editor.getModels()) {
     if (!keep.has(pathOfModel(model))) model.dispose()
   }
+}
+
+/**
+ * The editor currently on screen. The canvas needs it to move the caret and to
+ * push its own edits through the same undo stack the keyboard uses.
+ */
+let editor: monaco.editor.IStandaloneCodeEditor | null = null
+
+export function setEditor(instance: monaco.editor.IStandaloneCodeEditor | null): void {
+  editor = instance
+}
+
+function modelFor(path: string): monaco.editor.ITextModel | null {
+  const model = editor?.getModel()
+  return model && pathOfModel(model) === path ? model : null
+}
+
+/** The model's version id, which changes with every edit to the text. */
+export function textVersion(path: string): number {
+  return modelFor(path)?.getAlternativeVersionId() ?? 0
+}
+
+/**
+ * Apply a canvas action to the document as text.
+ *
+ * The edits go through the model, not the store, so they join the editor's
+ * undo stack: one stack element per action, undone by the same Ctrl+Z that
+ * undoes typing.
+ *
+ * `expected` is the source the edits were computed against. Offsets only mean
+ * anything against the text they were measured from, so if the document has
+ * moved on since — a second commit of the same rename, an autosave racing a
+ * keystroke — the edits are dropped rather than applied to the wrong spans.
+ */
+export type EditOutcome = 'applied' | 'stale' | 'no-editor'
+
+export function applyTextEdits(
+  path: string,
+  edits: readonly TextEdit[],
+  expected: string
+): EditOutcome {
+  const model = modelFor(path)
+  if (!model) return 'no-editor'
+  if (edits.length === 0) return 'applied'
+  if (model.getValue() !== expected) return 'stale'
+
+  model.pushStackElement()
+  model.pushEditOperations(
+    [],
+    edits.map((edit) => ({
+      range: monaco.Range.fromPositions(
+        model.getPositionAt(edit.start),
+        model.getPositionAt(edit.end)
+      ),
+      text: edit.text
+    })),
+    () => null
+  )
+  model.pushStackElement()
+  return 'applied'
+}
+
+export function undoText(path: string): void {
+  if (modelFor(path)) editor?.trigger('drawrix', 'undo', null)
+}
+
+export function redoText(path: string): void {
+  if (modelFor(path)) editor?.trigger('drawrix', 'redo', null)
+}
+
+/**
+ * True when the last caret move was ours rather than the author's.
+ *
+ * Revealing a range moves the caret, which would otherwise bounce straight
+ * back as a fresh selection and overwrite the one the canvas just made.
+ */
+let programmatic = false
+
+export function consumeProgrammaticCaret(): boolean {
+  const was = programmatic
+  programmatic = false
+  return was
+}
+
+/** Put the caret on a range and bring it into view, without stealing focus. */
+export function revealRange(path: string, range: SourceRange): void {
+  const model = modelFor(path)
+  if (!model || !editor) return
+  const target = new monaco.Range(
+    range.startLine,
+    range.startColumn,
+    range.endLine,
+    range.endColumn
+  )
+  programmatic = true
+  editor.setSelection(target)
+  editor.revealRangeInCenterIfOutsideViewport(target, monaco.editor.ScrollType.Smooth)
 }
 
 export function showDiagnostics(

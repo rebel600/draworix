@@ -12,6 +12,9 @@ import type {
 const AUTOSAVE_MS = 800
 const scheduleSave = keyedDebounce(AUTOSAVE_MS)
 
+/** A node or a relationship, by id. Null when nothing is selected. */
+export type Selection = { kind: 'node'; id: string } | { kind: 'edge'; id: string } | null
+
 export interface Tab {
   path: string
   title: string
@@ -28,6 +31,12 @@ interface AppState {
   documents: DocumentInfo[]
   tabs: Tab[]
   activeTabPath: string | null
+  /**
+   * What is selected in the active document. One selection shared by both
+   * panes: the editor sets it from wherever the caret is, the canvas sets it
+   * from whatever you clicked, and each of them highlights it its own way.
+   */
+  selection: Selection
   loading: boolean
   error: string | null
 
@@ -47,8 +56,11 @@ interface AppState {
 
   closeTab: (docPath: string) => void
   setActiveTab: (docPath: string) => void
+  setSelection: (selection: Selection) => void
   editSource: (docPath: string, source: string) => void
   moveNodes: (docPath: string, positions: Record<string, Point>) => void
+  /** Place or remove positions outright. `null` hands a node back to elk. */
+  setPositions: (docPath: string, positions: Record<string, Point | null>) => void
   clearLayout: (docPath: string) => void
   saveNow: (docPath: string) => Promise<void>
 
@@ -86,10 +98,12 @@ export const useApp = create<AppState>((set, get) => {
     documents: [],
     tabs: [],
     activeTabPath: null,
+    selection: null,
     loading: true,
     error: null,
 
     setError: (error) => set({ error }),
+    setSelection: (selection) => set({ selection }),
 
     bootstrap: () =>
       guard(async () => {
@@ -223,7 +237,7 @@ export const useApp = create<AppState>((set, get) => {
         }
       }),
 
-    setActiveTab: (docPath) => set({ activeTabPath: docPath }),
+    setActiveTab: (docPath) => set({ activeTabPath: docPath, selection: null }),
 
     /**
      * Local edit: update in memory, mark dirty, and schedule a debounced save.
@@ -257,6 +271,23 @@ export const useApp = create<AppState>((set, get) => {
               }
             : t
         )
+      }))
+      scheduleSave(docPath, () => {
+        void get().saveNow(docPath)
+      })
+    },
+
+    setPositions: (docPath, positions) => {
+      set((s) => ({
+        tabs: s.tabs.map((t) => {
+          if (t.path !== docPath) return t
+          const layout = { ...t.doc.layout }
+          for (const [id, point] of Object.entries(positions)) {
+            if (point) layout[id] = point
+            else delete layout[id]
+          }
+          return { ...t, doc: { ...t.doc, layout }, dirty: true }
+        })
       }))
       scheduleSave(docPath, () => {
         void get().saveNow(docPath)

@@ -2,13 +2,15 @@ import { useEffect, useRef } from 'react'
 import type * as monaco from 'monaco-editor/editor/editor.api'
 import {
   THEME_ID,
+  consumeProgrammaticCaret,
   disposeModelsExcept,
   getModel,
   pathOfModel,
+  setEditor,
   setupMonaco,
   showDiagnostics
 } from '@/lib/monaco'
-import { useApp, type Tab } from '@/store/app-store'
+import { useApp, type Selection, type Tab } from '@/store/app-store'
 import type { ParseResult } from '@shared/dsl'
 
 const EDITOR_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions = {
@@ -54,6 +56,10 @@ export default function SourcePane({
   parsed: ParseResult
 }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
+  // The caret listener is registered once; this keeps it reading the latest
+  // parse instead of the one that existed when the editor was created.
+  const parsedRef = useRef(parsed)
+  parsedRef.current = parsed
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   /** Set while we push the store's text into the model, to ignore the echo. */
   const applying = useRef(false)
@@ -78,13 +84,27 @@ export default function SourcePane({
       useApp.getState().editSource(pathOfModel(model), model.getValue())
     })
 
+    // Moving the caret selects whatever it landed in, which is how the canvas
+    // follows along as you move around the source.
+    const caret = editor.onDidChangeCursorPosition((event) => {
+      const model = editor.getModel()
+      if (!model) return
+      // Our own reveal put it there; the canvas already said what is selected.
+      if (consumeProgrammaticCaret()) return
+      useApp.getState().setSelection(selectionAt(parsedRef.current, model.getOffsetAt(event.position)))
+    })
+
     editor.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.KeyS, () => {
       const model = editor.getModel()
       if (model) void useApp.getState().saveNow(pathOfModel(model))
     })
 
+    setEditor(editor)
+
     return () => {
       change.dispose()
+      caret.dispose()
+      setEditor(null)
       editor.dispose()
       editorRef.current = null
     }
@@ -145,4 +165,22 @@ export default function SourcePane({
       <div ref={hostRef} data-testid="source-editor" className="min-h-0 flex-1" />
     </div>
   )
+}
+
+/**
+ * What the caret is sitting in. The innermost node wins, so a member inside a
+ * group selects the member; failing that, a relationship statement.
+ */
+function selectionAt(parsed: ParseResult, offset: number): Selection {
+  let node: { id: string; size: number } | null = null
+  for (const candidate of parsed.diagram.nodes) {
+    const { start, end } = candidate.range
+    if (offset < start || offset > end) continue
+    const size = end - start
+    if (!node || size < node.size) node = { id: candidate.id, size }
+  }
+  if (node) return { kind: 'node', id: node.id }
+
+  const edge = parsed.diagram.edges.find((e) => offset >= e.range.start && offset <= e.range.end)
+  return edge ? { kind: 'edge', id: edge.id } : null
 }

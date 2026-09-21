@@ -8,8 +8,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { assertInsideRoot, readJson, writeJsonAtomic } from '../src/main/fs/atomic'
 import { createDocument, normalizeDocument, slugifyName } from '../src/shared/dgm'
-import { parse } from '../src/shared/dsl'
-import type { Diagnostic, ParseResult } from '../src/shared/dsl'
+import { addEdge, applyEdits, parse, removeEdge, removeNode, renameNode } from '../src/shared/dsl'
+import type { Diagnostic, ParseResult, TextEdit } from '../src/shared/dsl'
+import type { DiagramType } from '../src/shared/types'
 
 let failures = 0
 
@@ -128,6 +129,129 @@ function checkDsl(): void {
   check('a repeated edge still gets a unique id', twice.diagram.edges[1].id === 'amany-to-oneb#1')
 }
 
+/** Parse, edit, and hand back the rewritten source. */
+function edit(
+  source: string,
+  type: DiagramType,
+  op: (source: string, diagram: ParseResult['diagram']) => TextEdit[]
+): string {
+  const { diagram } = parse(source, type)
+  return applyEdits(source, op(source, diagram))
+}
+
+function checkEdits(): void {
+  console.log('\ndsl edits: rename')
+  const schema = [
+    '// the people table',
+    'users {',
+    '  id    string pk',
+    '  users string  // a column that happens to share the name',
+    '}',
+    '',
+    'orders {',
+    '  user_id string fk',
+    '}',
+    '',
+    'orders.user_id > users.id',
+    ''
+  ].join('\n')
+
+  const renamed = edit(schema, 'erd', (src, d) => renameNode(src, d, 'users', 'people'))
+  check('renames the declaration', renamed.includes('people {'))
+  check('follows the reference in the relationship', renamed.includes('> people.id'))
+  check('leaves a same-named column alone', renamed.includes('  users string'))
+  check('leaves comments alone', renamed.startsWith('// the people table'))
+  check('does not touch other tables', renamed.includes('orders {'))
+  const afterRename = parse(renamed, 'erd')
+  check(
+    'the rewritten source still parses cleanly',
+    afterRename.diagnostics.length === 0,
+    afterRename.diagnostics.map((x) => x.code).join(',')
+  )
+  check(
+    'and describes the same diagram under the new name',
+    afterRename.diagram.nodes.map((n) => n.id).join(',') === 'people,orders' &&
+      afterRename.diagram.edges.length === 1
+  )
+
+  const quoted = edit(schema, 'erd', (src, d) => renameNode(src, d, 'users', 'App Users'))
+  check('quotes a name that needs it', quoted.includes('"App Users" {'))
+  check(
+    'a quoted rename still parses',
+    parse(quoted, 'erd').diagram.nodes.some((n) => n.name === 'App Users')
+  )
+  check(
+    'renaming to the same name is not an edit',
+    edit(schema, 'erd', (src, d) => renameNode(src, d, 'users', 'users')) === schema
+  )
+
+  const implicit = edit('start > validate\nvalidate > done\n', 'flow', (src, d) =>
+    renameNode(src, d, 'validate', 'check')
+  )
+  check('renames a node that only edges mention', implicit === 'start > check\ncheck > done\n')
+
+  console.log('\ndsl edits: delete')
+  const withoutUsers = edit(schema, 'erd', (src, d) => removeNode(src, d, 'users'))
+  check('removes the block', !withoutUsers.includes('users {'))
+  check('removes the relationship that used it', !withoutUsers.includes('orders.user_id >'))
+  check('keeps the other table whole', withoutUsers.includes('orders {'))
+  check(
+    'leaves nothing dangling',
+    parse(withoutUsers, 'erd').diagnostics.length === 0,
+    JSON.stringify(withoutUsers)
+  )
+
+  const arch = 'vpc {\n  alb\n  api\n}\n\nalb > api\napi > db\n'
+  const withoutVpc = edit(arch, 'arch', (src, d) => removeNode(src, d, 'vpc'))
+  check('deleting a group takes its members', !withoutVpc.includes('alb'))
+  check('and every relationship between them', !withoutVpc.includes('> api'))
+  check('leaving only what stood outside it', withoutVpc.trim() === '')
+
+  const oneMember = edit(arch, 'arch', (src, d) => removeNode(src, d, 'alb'))
+  check('deleting a member keeps the group', oneMember.includes('vpc {'))
+  check('and keeps its siblings', oneMember.includes('  api'))
+  check('and drops the relationships it was in', !oneMember.includes('alb'))
+  check('and keeps the ones it was not in', oneMember.includes('api > db'))
+
+  const trimmed = edit('a > b // why\nb > c\n', 'flow', (src, d) =>
+    removeEdge(src, d, parse(src, 'flow').diagram.edges[0].id)
+  )
+  check('removing a relationship takes its trailing comment', trimmed === 'b > c\n')
+  check(
+    'removing a relationship leaves both nodes alone',
+    edit('x\ny\nx > y\n', 'flow', (src, d) =>
+      removeEdge(src, d, parse(src, 'flow').diagram.edges[0].id)
+    ) === 'x\ny\n'
+  )
+
+  console.log('\ndsl edits: connect')
+  check(
+    'appends a relationship',
+    edit('a > b\n', 'flow', (src, d) => addEdge(src, d, 'b', 'c')) === 'a > b\nb > c\n'
+  )
+  check(
+    'uses the operator for the kind asked for',
+    edit('a > b\n', 'flow', (src, d) => addEdge(src, d, 'b', 'c', 'many-to-many')) ===
+      'a > b\nb <> c\n'
+  )
+  check(
+    'starts a new line when the file lacks one',
+    edit('a > b', 'flow', (src, d) => addEdge(src, d, 'b', 'c')) === 'a > b\nb > c\n'
+  )
+  check(
+    'refuses to duplicate a relationship',
+    edit('a > b\n', 'flow', (src, d) => addEdge(src, d, 'a', 'b')) === 'a > b\n'
+  )
+  check(
+    'refuses to join a node to itself',
+    edit('a > b\n', 'flow', (src, d) => addEdge(src, d, 'a', 'a')) === 'a > b\n'
+  )
+  check(
+    'quotes a name that needs it',
+    edit('a > b\n', 'flow', (src, d) => addEdge(src, d, 'a', 'two words')).includes('"two words"')
+  )
+}
+
 async function main(): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'drawrix-smoke-'))
 
@@ -163,6 +287,7 @@ async function main(): Promise<void> {
   check('survives null input', normalizeDocument(null, 'x').source === '')
 
   checkDsl()
+  checkEdits()
 
   await fs.rm(root, { recursive: true, force: true })
 
