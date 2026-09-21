@@ -146,3 +146,37 @@ export async function scanAllDocuments(workspaceIds: string[]): Promise<Document
   const all = await Promise.all(workspaceIds.map((id) => listDocuments(id)))
   return all.flat()
 }
+
+/** Where a document's exports go: a folder beside it, inside its workspace. */
+export const EXPORT_DIR = 'exports'
+
+/**
+ * Write an export next to the document it came from.
+ *
+ * Exports are files like everything else here — no save dialog, no hidden
+ * app folder. They land in `<workspace>/exports/` so they sit with the
+ * diagram, and the renderer is told where they went.
+ */
+export async function writeExport(
+  docPath: string,
+  fileName: string,
+  data: string,
+  encoding: 'utf8' | 'base64'
+): Promise<string> {
+  const resolved = await safeDocPath(docPath)
+  const safeName = slugifyName(path.basename(fileName, path.extname(fileName)))
+  const extension = path.extname(fileName).replace(/[^.A-Za-z0-9]/g, '')
+  if (!safeName || !extension) throw new Error(`Not a usable export name: ${fileName}`)
+
+  const dir = path.join(path.dirname(resolved), EXPORT_DIR)
+  const target = path.join(dir, safeName + extension)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(target, Buffer.from(data, encoding))
+  return target
+}
+
+/** Show an exported file in the OS file manager. */
+export async function revealPath(target: string): Promise<void> {
+  const root = await ensureDataRoot()
+  shell.showItemInFolder(assertInsideRoot(target, root))
+}

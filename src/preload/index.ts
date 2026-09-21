@@ -44,7 +44,17 @@ const api = {
       ipcRenderer.invoke(CH.docWrite, docPath, doc),
     rename: (docPath: string, title: string): Promise<Result<DocumentInfo>> =>
       ipcRenderer.invoke(CH.docRename, docPath, title),
-    remove: (docPath: string): Promise<Result<true>> => ipcRenderer.invoke(CH.docDelete, docPath)
+    remove: (docPath: string): Promise<Result<true>> => ipcRenderer.invoke(CH.docDelete, docPath),
+    /** Writes an export beside the document and answers with its path. */
+    export: (
+      docPath: string,
+      fileName: string,
+      data: string,
+      encoding: 'utf8' | 'base64'
+    ): Promise<Result<string>> =>
+      ipcRenderer.invoke(CH.docExport, docPath, fileName, data, encoding),
+    revealFile: (target: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(CH.docRevealFile, target)
   },
   index: {
     recents: (entry?: RecentEntry, limit?: number): Promise<Result<RecentEntry[]>> =>

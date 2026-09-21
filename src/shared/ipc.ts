@@ -17,6 +17,8 @@ export const CH = {
   docWrite: 'doc:write',
   docRename: 'doc:rename',
   docDelete: 'doc:delete',
+  docExport: 'doc:export',
+  docRevealFile: 'doc:revealFile',
 
   indexRecents: 'index:recents',
   indexSearch: 'index:search',

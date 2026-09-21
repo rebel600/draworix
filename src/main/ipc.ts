@@ -23,8 +23,10 @@ import {
   listDocuments,
   readDocument,
   renameDocument,
+  revealPath,
   scanAllDocuments,
-  writeDocument
+  writeDocument,
+  writeExport
 } from './fs/document'
 import type { IndexStore } from './store/index-store'
 
@@ -114,6 +116,16 @@ export function registerIpc(index: IndexStore): void {
   handle<[string], true>(CH.docDelete, async (docPath) => {
     await deleteDocument(docPath)
     index.removeDocument(docPath)
+    return true as const
+  })
+
+  handle<[string, string, string, 'utf8' | 'base64'], string>(
+    CH.docExport,
+    (docPath, fileName, data, encoding) => writeExport(docPath, fileName, data, encoding)
+  )
+
+  handle<[string], true>(CH.docRevealFile, async (target) => {
+    await revealPath(target)
     return true as const
   })
 

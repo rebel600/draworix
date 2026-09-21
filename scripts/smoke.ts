@@ -10,6 +10,14 @@ import { assertInsideRoot, readJson, writeJsonAtomic } from '../src/main/fs/atom
 import { createDocument, normalizeDocument, slugifyName } from '../src/shared/dgm'
 import { addEdge, applyEdits, parse, removeEdge, removeNode, renameNode } from '../src/shared/dsl'
 import type { Diagnostic, ParseResult, TextEdit } from '../src/shared/dsl'
+import {
+  renderText,
+  targetsFor,
+  toDbml,
+  toPrisma,
+  toSql,
+  toSvg
+} from '../src/shared/export'
 import type { DiagramType } from '../src/shared/types'
 
 let failures = 0
@@ -252,6 +260,139 @@ function checkEdits(): void {
   )
 }
 
+const SCHEMA = [
+  '// a schema worth exporting',
+  'users {',
+  '  id         uuid      pk',
+  '  email      string    unique',
+  '  full_name  string',
+  '  balance    decimal(10,2)',
+  '  created_at timestamp notnull',
+  '  legacy_ref citext    index',
+  '}',
+  '',
+  'orders {',
+  '  id      uuid   pk',
+  '  user_id uuid   fk',
+  '  total   decimal(10,2)',
+  '}',
+  '',
+  'orders.user_id > users.id',
+  ''
+].join('\n')
+
+function checkExports(): void {
+  const { diagram } = parse(SCHEMA, 'erd')
+
+  console.log('\nexport: sql')
+  const sql = toSql(diagram, 'Billing')
+  check('names the document it came from', sql.startsWith('-- Billing'))
+  check('creates every table', sql.includes('CREATE TABLE users (') && sql.includes('CREATE TABLE orders ('))
+  check('maps the types', sql.includes('email      text') && sql.includes('created_at timestamptz'))
+  check('keeps type arguments', sql.includes('numeric(10,2)'))
+  check('passes an unknown type through', sql.includes('citext'))
+  check('a primary key is not null', sql.includes('id         uuid NOT NULL'))
+  check('notnull is honoured', sql.includes('timestamptz NOT NULL'))
+  check('a plain column stays nullable', sql.includes('full_name  text,'))
+  check('declares the primary key', sql.includes('PRIMARY KEY (id)'))
+  check('declares the unique', sql.includes('UNIQUE (email)'))
+  check('creates the index', sql.includes('CREATE INDEX users_legacy_ref_idx ON users (legacy_ref);'))
+  check(
+    'adds the foreign key in the right direction',
+    sql.includes(
+      'ALTER TABLE orders ADD CONSTRAINT orders_user_id_fkey FOREIGN KEY (user_id) REFERENCES users (id);'
+    )
+  )
+  check(
+    'reverses a one-to-many',
+    toSql(parse('a {\n  id uuid pk\n}\nb {\n  a_id uuid\n}\na.id < b.a_id\n', 'erd').diagram, 't')
+      .includes('ALTER TABLE b ADD CONSTRAINT b_a_id_fkey FOREIGN KEY (a_id) REFERENCES a (id);')
+  )
+  check(
+    'a one-to-one is also unique',
+    toSql(parse('a {\n  id uuid pk\n}\nb {\n  a_id uuid\n}\nb.a_id - a.id\n', 'erd').diagram, 't')
+      .includes('ADD CONSTRAINT b_a_id_key UNIQUE (a_id);')
+  )
+  check(
+    'says what it cannot do for a many-to-many',
+    toSql(parse('a {\n  id uuid pk\n}\nb {\n  id uuid pk\n}\na.id <> b.id\n', 'erd').diagram, 't')
+      .includes('a many-to-many needs a join table')
+  )
+  check(
+    'says what it cannot do without columns',
+    toSql(parse('a {\n  id uuid pk\n}\nb {\n  id uuid pk\n}\na > b\n', 'erd').diagram, 't')
+      .includes('name the columns to get a foreign key')
+  )
+  check(
+    'quotes a name that needs it',
+    toSql(parse('"Order Items" {\n  id uuid pk\n}\n', 'erd').diagram, 't')
+      .includes('CREATE TABLE "Order Items" (')
+  )
+
+  console.log('\nexport: prisma')
+  const prisma = toPrisma(diagram, 'Billing')
+  check('declares a datasource', prisma.includes('datasource db {'))
+  check('models every table', prisma.includes('model users {') && prisma.includes('model orders {'))
+  check('maps the types', prisma.includes('created_at DateTime'))
+  check('marks the primary key', prisma.includes('@id'))
+  check('marks the unique', prisma.includes('@unique'))
+  check('optional unless required', prisma.includes('full_name  String?'))
+  check('required stays required', /created_at DateTime\s/.test(prisma))
+  check('notes an unmapped type rather than lying', prisma.includes('// citext'))
+  check('writes the relation on the many side', prisma.includes('@relation(fields: [user_id], references: [id])'))
+  check('and the list on the one side', prisma.includes('orders     orders[]'))
+  const mapped = toPrisma(parse('"Order Items" {\n  id uuid pk\n}\n', 'erd').diagram, 't')
+  check('slugs a name prisma would reject', mapped.includes('model Order_Items {'))
+  check('and maps it back to the real one', mapped.includes('@@map("Order Items")'))
+
+  console.log('\nexport: dbml')
+  const dbml = toDbml(diagram, 'Billing')
+  check('declares every table', dbml.includes('Table users {') && dbml.includes('Table orders {'))
+  check('keeps the types as written', dbml.includes('decimal(10,2)'))
+  check('carries the settings', dbml.includes('[pk]') && dbml.includes('[unique]'))
+  check('writes an indexes block', dbml.includes('Indexes {') && dbml.includes('    legacy_ref'))
+  check('writes the ref with our own operator', dbml.includes('Ref: orders.user_id > users.id'))
+  check(
+    'keeps the operator of every kind',
+    toDbml(parse('a {\n  id uuid\n}\nb {\n  id uuid\n}\na.id <> b.id\n', 'erd').diagram, 't')
+      .includes('Ref: a.id <> b.id')
+  )
+
+  console.log('\nexport: svg')
+  const positions = { users: { x: 0, y: 0 }, orders: { x: 400, y: 120 } }
+  const svg = toSvg(diagram, positions, 'Billing')
+  check('is an svg document', svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg"'))
+  check('is closed', svg.trimEnd().endsWith('</svg>'))
+  check('titles itself after the document', svg.includes('<title>Billing</title>'))
+  check('draws no foreignObject', !svg.includes('foreignObject'))
+  check('draws every table name', svg.includes('>users</text>') && svg.includes('>orders</text>'))
+  check('draws the columns', svg.includes('>created_at</text>'))
+  check('draws the modifiers apart from the type', svg.includes('<tspan fill="#7ba3ff"> pk</tspan>'))
+  check('draws a relationship', svg.includes('marker-end="url(#arrow)"'))
+  check('sizes the viewBox around the nodes', /viewBox="-28 -28 \d/.test(svg))
+  check('escapes text', toSvg(parse('"a<b>" {\n}\n', 'erd').diagram, {}, 't').includes('a&lt;b&gt;'))
+  check('survives an empty diagram', toSvg(parse('', 'erd').diagram, {}, 'Empty').includes('Nothing to draw'))
+
+  const arch = parse(createDocument('Arch', 'arch').source, 'arch')
+  const archSvg = toSvg(
+    arch.diagram,
+    { vpc: { x: 0, y: 0 }, alb: { x: 16, y: 34 }, api: { x: 190, y: 34 }, db: { x: 364, y: 34 } },
+    'Platform'
+  )
+  check('draws a group as a dashed box', archSvg.includes('stroke-dasharray="4 4"'))
+  check('labels the group', archSvg.includes('>VPC</text>'))
+  check(
+    'places members relative to their group',
+    // alb sits at 16,34 inside a group at 0,0 — so it is drawn there, not at 16,34 of nowhere.
+    archSvg.includes('x="16" y="34"')
+  )
+
+  console.log('\nexport: targets')
+  check('an erd can export everything', targetsFor('erd').length === 5)
+  check('a flow exports pictures only', targetsFor('flow').map((t) => t.id).join(',') === 'svg,png')
+  check('renderText routes by format', renderText('dbml', diagram, 'Billing', {}).includes('Table users {'))
+}
+
 async function main(): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'drawrix-smoke-'))
 
@@ -288,6 +429,7 @@ async function main(): Promise<void> {
 
   checkDsl()
   checkEdits()
+  checkExports()
 
   await fs.rm(root, { recursive: true, force: true })
 

@@ -27,6 +27,7 @@ import {
   type TextEdit
 } from '@shared/dsl'
 import type { Point } from '@shared/types'
+import ExportMenu from './ExportMenu'
 import { nodeTypes, type DiagramNodeType } from './nodes'
 
 /** Long enough that a burst of keystrokes produces one layout, not twenty. */
@@ -209,9 +210,17 @@ export default function DiagramCanvas({
 
   // ----------------------------------------------------------------- elements
 
+  /** Where every node sits: what was dragged, else what elk decided. */
+  const positions = useMemo(() => {
+    const placedAt: Record<string, Point> = {}
+    for (const node of diagram.nodes) {
+      placedAt[node.id] = tab.doc.layout[node.id] ?? auto[node.id] ?? { x: 0, y: 0 }
+    }
+    return placedAt
+  }, [diagram, tab.doc.layout, auto])
+
   const nodes = useMemo<DiagramNodeType[]>(() => {
-    const saved = tab.doc.layout
-    const at = (id: string): Point => saved[id] ?? auto[id] ?? { x: 0, y: 0 }
+    const at = (id: string): Point => positions[id] ?? { x: 0, y: 0 }
 
     const sizes = new Map<string, Size>()
     for (const node of diagram.nodes) sizes.set(node.id, measure(node))
@@ -259,7 +268,7 @@ export default function DiagramCanvas({
       }
       return { ...common, type: 'plain' as const, data: { ...shared, implicit: node.implicit } }
     })
-  }, [diagram, tab.doc.layout, auto, selection, vertical, rename, renaming])
+  }, [diagram, positions, selection, vertical, rename, renaming])
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -400,27 +409,30 @@ export default function DiagramCanvas({
           color="var(--color-ink-600)"
         />
         <Controls showInteractive={false} />
-        {placed > 0 && (
-          <Panel position="top-right">
-            <button
-              onClick={() => {
-                // Recorded like a drag, so handing the diagram to elk is as
-                // undoable as placing a node was.
-                const before: Positions = { ...tab.doc.layout }
-                const after: Positions = Object.fromEntries(
-                  Object.keys(before).map((id) => [id, null])
-                )
-                clearLayout(tab.path)
-                recordDrag(tab.path, before, after)
-                framed.current = null
-              }}
-              title={`${placed} node${placed === 1 ? '' : 's'} placed by hand`}
-              className="rounded border border-ink-500 bg-ink-700 px-2 py-1 text-[11px] text-mist-200 hover:border-accent-500 hover:text-mist-100"
-            >
-              Auto layout
-            </button>
-          </Panel>
-        )}
+        <Panel position="top-right">
+          <div className="flex flex-col items-end gap-1.5">
+            <ExportMenu tab={tab} diagram={diagram} />
+            {placed > 0 && (
+              <button
+                onClick={() => {
+                  // Recorded like a drag, so handing the diagram to elk is as
+                  // undoable as placing a node was.
+                  const before: Positions = { ...tab.doc.layout }
+                  const after: Positions = Object.fromEntries(
+                    Object.keys(before).map((id) => [id, null])
+                  )
+                  clearLayout(tab.path)
+                  recordDrag(tab.path, before, after)
+                  framed.current = null
+                }}
+                title={`${placed} node${placed === 1 ? '' : 's'} placed by hand`}
+                className="rounded border border-ink-500 bg-ink-700 px-2 py-1 text-[11px] text-mist-200 hover:border-accent-500 hover:text-mist-100"
+              >
+                Auto layout
+              </button>
+            )}
+          </div>
+        </Panel>
       </ReactFlow>
     </div>
   )

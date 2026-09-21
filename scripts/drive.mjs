@@ -550,6 +550,86 @@ async function main() {
   )
   await shot(page, 'architecture')
 
+  console.log('\nexport')
+  const exportsDir = path.join(dataRoot, 'Hellorix-Platform', 'exports')
+  const offered = async () => {
+    await clickText(page, 'Export')
+    await until('the export menu', () =>
+      page.evaluate(() => document.querySelectorAll('[data-testid^="export-"]').length > 0)
+    )
+    return page.evaluate(() =>
+      [...document.querySelectorAll('[data-testid^="export-"]')].map((b) =>
+        b.getAttribute('data-testid').replace('export-', '')
+      )
+    )
+  }
+
+  // The architecture diagram is open, and it is not a schema.
+  check(
+    'an architecture diagram offers pictures only',
+    (await offered()).join(',') === 'svg,png',
+    (await page.evaluate(() => document.body.innerText.slice(0, 80))) ?? ''
+  )
+  await page.click('[data-testid="export-svg"]')
+  const svgFile = path.join(exportsDir, 'Platform.svg')
+  check('svg lands beside the document', await until('the svg file', () => fs.existsSync(svgFile)))
+  const svg = fs.readFileSync(svgFile, 'utf8')
+  check('it is a real vector file', svg.startsWith('<svg') && !svg.includes('foreignObject'))
+  check('it drew the group', svg.includes('>VPC</text>'))
+  check('it drew the services', svg.includes('>alb</text>') && svg.includes('>db</text>'))
+  check('the toast says where it went', await bodyHas(page, 'exports/Platform.svg'))
+  await shot(page, 'exported')
+
+  // Back to the schema, which can export everything.
+  await clickText(page, 'Billing Schema')
+  await until('the schema canvas', () =>
+    page.evaluate(() => !!document.querySelector('.react-flow__node[data-id="users"]'))
+  )
+  check('a schema offers every format', (await offered()).join(',') === 'sql,prisma,dbml,svg,png')
+
+  await page.click('[data-testid="export-sql"]')
+  const sqlFile = path.join(exportsDir, 'Billing-Schema.sql')
+  check('sql lands beside the document', await until('the sql file', () => fs.existsSync(sqlFile)))
+  const sql = fs.readFileSync(sqlFile, 'utf8')
+  check('it creates the tables', sql.includes('CREATE TABLE users (') && sql.includes('CREATE TABLE orders ('))
+  check('it adds the foreign key', sql.includes('FOREIGN KEY (user_id) REFERENCES users (id)'))
+
+  await offered()
+  await page.click('[data-testid="export-prisma"]')
+  const prismaFile = path.join(exportsDir, 'Billing-Schema.prisma')
+  check('prisma lands beside the document', await until('the prisma file', () => fs.existsSync(prismaFile)))
+  check('it models the tables', fs.readFileSync(prismaFile, 'utf8').includes('model users {'))
+
+  // Exported straight after a tab switch, before the canvas has its layout:
+  // the picture must still be laid out, not every table stacked at the origin.
+  await offered()
+  await page.click('[data-testid="export-svg"]')
+  const schemaSvgFile = path.join(exportsDir, 'Billing-Schema.svg')
+  await until('the schema svg', () => fs.existsSync(schemaSvgFile))
+  const boxes = [
+    ...fs
+      .readFileSync(schemaSvgFile, 'utf8')
+      .matchAll(/<rect x="([\d.-]+)" y="([\d.-]+)" width="([\d.]+)" height="([\d.]+)" rx="6" fill="#11141c"/g)
+  ].map((m) => ({ x: +m[1], y: +m[2], w: +m[3], h: +m[4] }))
+  const overlapping = boxes.some((a, i) =>
+    boxes.some(
+      (b, j) => i < j && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    )
+  )
+  check('the exported picture has every table', boxes.length === 4, `${boxes.length} boxes`)
+  check('and no two of them overlap', !overlapping)
+
+  await offered()
+  await page.click('[data-testid="export-png"]')
+  const pngFile = path.join(exportsDir, 'Billing-Schema.png')
+  check('png lands beside the document', await until('the png file', () => fs.existsSync(pngFile)))
+  const png = fs.readFileSync(pngFile)
+  check(
+    'it is a real png',
+    png.length > 1000 && png.subarray(0, 4).toString('hex') === '89504e47',
+    `${png.length} bytes`
+  )
+
   check('nothing threw in the renderer', consoleErrors.length === 0, consoleErrors.join(' | '))
 
   const errors = await page.evaluate(() =>

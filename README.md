@@ -5,9 +5,9 @@ get an auto-laid-out diagram on the right, organised into per-project workspaces
 
 ## Status
 
-**M4 complete** — edits flow both ways. Rename, delete or connect on the
-canvas and the source is rewritten in place; move around the source and the
-canvas follows. One undo stack covers both.
+**M5 complete** — a schema exports to SQL, Prisma and DBML, and any diagram
+exports to SVG and PNG. Next is M6: a command palette, themes, and a packaged
+installer.
 
 | Milestone | Scope | State |
 | --- | --- | --- |
@@ -16,8 +16,8 @@ canvas follows. One undo stack covers both.
 | M2 | DSL parser with source ranges, Monaco language | done |
 | M3 | React Flow canvas + ELK auto-layout | done |
 | M4 | Two-way code/canvas sync, unified undo | done |
-| M5 | Export: SQL, Prisma, DBML, PNG, SVG | next |
-| M6 | Command palette, themes, packaged installer | |
+| M5 | Export: SQL, Prisma, DBML, PNG, SVG | done |
+| M6 | Command palette, themes, packaged installer | next |
 
 ## Commands
 
@@ -37,7 +37,7 @@ src/
   main/       Node side: fs, settings, sqlite index, ipc handlers
   preload/    the only bridge the renderer can see (contextBridge)
   renderer/   React UI: Monaco setup and ELK layout in lib/, canvas in components/
-  shared/     types, ipc channel names, document helpers, the DSL and its edits
+  shared/     types, ipc names, document helpers, the DSL, its edits, exporters
 ```
 
 `src/shared` is compiled into all three bundles, so nothing there may import
@@ -141,6 +141,31 @@ text version they happened at, which is what keeps the two in order: a drag
 is only undone first if no text edit landed after it. *Auto layout* is
 recorded the same way, so handing the diagram back to ELK is undoable too.
 
+## Export
+
+*Export* on the canvas writes into an `exports` folder beside the document,
+inside its workspace — plain files like everything else here, with a toast
+saying where each one landed.
+
+| Format | For | Notes |
+| --- | --- | --- |
+| SQL | ERD | PostgreSQL DDL. Columns are nullable unless `pk` or `notnull`, as in SQL itself. |
+| Prisma | ERD | Relations on both sides; names Prisma rejects are slugged and `@@map`ped back. |
+| DBML | ERD | Near one-to-one: DBML uses the same four relationship operators. |
+| SVG | any | Real vector artwork — rectangles, paths and text, no `foreignObject`. |
+| PNG | any | The SVG above, rasterised at 2x. |
+
+The exporters are pure functions in `src/shared/export`, so each one is tested
+like the parser is. They say what they cannot do rather than guess: an unknown
+column type passes through verbatim to SQL and DBML and is annotated in
+Prisma, and a relationship with no columns named becomes a comment instead of
+an invented foreign key.
+
+Pictures are drawn from the model, not captured from the screen, using the
+same sizes the canvas renders at — so an export is laid out exactly like the
+canvas, and works even straight after switching tabs, before the canvas has
+finished arranging itself.
+
 ## How data is stored
 
 Files on disk are the source of truth. The SQLite index in `userData` is
@@ -152,6 +177,7 @@ E:/drawrix-data/            <- data root, changeable in the app
   my-saas/                  <- workspace = folder
     workspace.json          <- name, icon
     schema.dgm              <- document
+    exports/                <- anything exported from it
     .history/               <- last 20 versions of each document
 ```
 
